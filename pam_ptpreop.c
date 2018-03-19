@@ -1,9 +1,38 @@
 /** BEGIN COPYRIGHT BLOCK
+ * This Program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; version 2 of the License.
+ * 
+ * This Program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License along with
+ * this Program; if not, write to the Free Software Foundation, Inc., 59 Temple
+ * Place, Suite 330, Boston, MA 02111-1307 USA.
+ * 
+ * In addition, as a special exception, Red Hat, Inc. gives You the additional
+ * right to link the code of this Program with code not covered under the GNU
+ * General Public License ("Non-GPL Code") and to distribute linked combinations
+ * including the two, subject to the limitations in this paragraph. Non-GPL Code
+ * permitted under this exception must only link to the code of this Program
+ * through those well defined interfaces identified in the file named EXCEPTION
+ * found in the source code files (the "Approved Interfaces"). The files of
+ * Non-GPL Code may instantiate templates or use macros or inline functions from
+ * the Approved Interfaces without causing the resulting work to be covered by
+ * the GNU General Public License. Only Red Hat, Inc. may make changes or
+ * additions to the list of Approved Interfaces. You must obey the GNU General
+ * Public License in all respects for all of the Program code and other code used
+ * in conjunction with the Program except the Non-GPL Code covered by this
+ * exception. If you modify this file, you may extend this exception to your
+ * version of the file, but you are not obligated to do so. If you do not wish to
+ * provide this exception without modification, you must delete this exception
+ * statement from your version and license this file solely under the GPL without
+ * exception. 
+ * 
+ * 
  * Copyright (C) 2005 Red Hat, Inc.
  * All rights reserved.
- *
- * License: GPL (version 3 or any later version).
- * See LICENSE for details. 
  * END COPYRIGHT BLOCK **/
 
 #ifdef HAVE_CONFIG_H
@@ -27,6 +56,7 @@ static Slapi_RWLock *g_pam_config_lock = NULL;
 /*
  * Plug-in globals
  */
+int g_pam_plugin_started = 0;
 PRCList *pam_passthru_global_config = NULL;
 
 /*
@@ -303,6 +333,11 @@ pam_passthru_bindpreop_start( Slapi_PBlock *pb )
     slapi_log_error( SLAPI_LOG_TRACE, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                      "=> pam_passthru_bindpreop_start\n" );
 
+    /* Check if we're already started */
+    if (g_pam_plugin_started) {
+        goto done;
+    }
+
     /* Get the plug-in configuration DN and store it for later use. */
     slapi_pblock_get(pb, SLAPI_TARGET_SDN, &pluginsdn);
     if (NULL == pluginsdn || 0 == slapi_sdn_get_ndn_len(pluginsdn)) {
@@ -359,6 +394,7 @@ done:
         g_pam_config_lock = NULL;
         slapi_ch_free((void **)&pam_passthru_global_config);
     } else {
+        g_pam_plugin_started = 1;
         slapi_log_error( SLAPI_LOG_PLUGIN, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                          "pam_passthru: ready for service\n" );
     }
@@ -381,16 +417,26 @@ pam_passthru_bindpreop_close( Slapi_PBlock *pb )
     slapi_log_error( SLAPI_LOG_TRACE, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                      "=> pam_passthru_bindpreop_close\n" );
 
+    if (!g_pam_plugin_started) {
+        goto done;
+    }
+
+    pam_passthru_write_lock();
+    g_pam_plugin_started = 0;
     pam_passthru_delete_config();
     pam_passthru_unlock();
 
-    slapi_sdn_free((Slapi_DN **)&pam_passthruauth_plugin_sdn);
-    pam_passthru_free_config_area();
     slapi_ch_free((void **)&pam_passthru_global_config);
-    pam_passthru_pam_free();
-    slapi_destroy_rwlock(g_pam_config_lock);
-    g_pam_config_lock = NULL;
 
+    /* We explicitly don't destroy the config lock here.  If we did,
+     * there is the slight possibility that another thread that just
+     * passed the g_pam_plugin_started check is about to try to obtain
+     * a reader lock.  We leave the lock around so these threads
+     * don't crash the process.  If we always check the started
+     * flag again after obtaining a reader lock, no free'd resources
+     * will be used. */
+
+done:
     slapi_log_error( SLAPI_LOG_TRACE, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                      "<= pam_passthru_bindpreop_close\n" );
 
@@ -402,7 +448,7 @@ static int
 pam_passthru_bindpreop( Slapi_PBlock *pb )
 {
     int rc = LDAP_SUCCESS;
-    ber_tag_t method;
+    int method;
     const char *normbinddn;
     char *errmsg = NULL;
     Slapi_DN *bindsdn = NULL;
@@ -431,8 +477,8 @@ pam_passthru_bindpreop( Slapi_PBlock *pb )
      * We only handle simple bind requests that include non-NULL binddn and
      * credentials.  Let the Directory Server itself handle everything else.
      */
-    if ((method != LDAP_AUTH_SIMPLE) || (*normbinddn == '\0') ||
-        (creds->bv_len == 0)) {
+    if ( method != LDAP_AUTH_SIMPLE || *normbinddn == '\0' ||
+            creds->bv_len == 0 ) {
         slapi_log_error( SLAPI_LOG_PLUGIN, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                          "<= not handled (not simple bind or NULL dn/credentials)\n" );
         return retcode;
@@ -443,7 +489,7 @@ pam_passthru_bindpreop( Slapi_PBlock *pb )
     pam_passthru_read_lock();
 
     /* Bail out if the plug-in close function was just called. */
-    if (!slapi_plugin_running(pb)) {
+    if (!g_pam_plugin_started) {
         goto done;
     }
 
@@ -496,13 +542,13 @@ pam_passthru_bindpreop( Slapi_PBlock *pb )
     }
 
     if (rc == LDAP_SUCCESS) {
-        /* we are handling the result */
-        slapi_send_ldap_result(pb, rc, NULL, errmsg, 0, NULL);
-        /* tell bind code we handled the result */
-        retcode = PAM_PASSTHRU_OP_HANDLED;
-    } else if (!cfg->pamptconfig_fallback) {
-        /* tell bind code we already sent back the error result in pam_ptimpl.c */
-        retcode = PAM_PASSTHRU_OP_HANDLED;
+	    /* we are handling the result */
+	    slapi_send_ldap_result(pb, rc, NULL, errmsg, 0, NULL);
+	    /* tell bind code we handled the result */
+	    retcode = PAM_PASSTHRU_OP_HANDLED;
+    } else if ((rc == LDAP_UNWILLING_TO_PERFORM) || !cfg->pamptconfig_fallback) {
+	    /* tell bind code we already sent back the error result in pam_ptimpl.c */
+	    retcode = PAM_PASSTHRU_OP_HANDLED;
     }
 
 done:
@@ -532,6 +578,11 @@ pam_passthru_preop(Slapi_PBlock *pb, int modtype)
 
     slapi_log_error(SLAPI_LOG_TRACE, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                     "=> pam_passthru_preop\n");
+
+    /* Just bail if we aren't ready to service requests yet. */
+    if (!g_pam_plugin_started) {
+        goto bail;
+    }
 
     /* Get the target SDN. */
     slapi_pblock_get(pb, SLAPI_TARGET_SDN, &sdn);
@@ -595,6 +646,7 @@ bail:
         slapi_send_ldap_result(pb, ret, NULL, returntext, 0, NULL);
         ret = SLAPI_PLUGIN_FAILURE;
     }
+
     slapi_log_error(SLAPI_LOG_TRACE, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                     "<= pam_passthru_preop\n");
 
@@ -641,10 +693,14 @@ pam_passthru_postop(Slapi_PBlock *pb)
     slapi_log_error(SLAPI_LOG_TRACE, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                     "=> pam_passthru_postop\n");
 
+    /* Just bail if we aren't ready to service requests yet. */
+    if (!g_pam_plugin_started) {
+        goto bail;
+    }
+
     /* Make sure the operation succeeded and bail if it didn't. */
     slapi_pblock_get(pb, SLAPI_PLUGIN_OPRETURN, &oprc);
     if (oprc != 0) {
-        ret = oprc;
         goto bail;
     }
 
@@ -653,7 +709,6 @@ pam_passthru_postop(Slapi_PBlock *pb)
     if (!sdn) {
         slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                         "pam_passthru_postop: unale to fetch target SDN.\n");
-        ret = SLAPI_PLUGIN_FAILURE;
         goto bail;
     }
 
@@ -668,7 +723,6 @@ pam_passthru_postop(Slapi_PBlock *pb)
             slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
                             "pam_passthru_postop: unable to fetch post-op "
                             "entry for rename operation.\n");
-            ret = SLAPI_PLUGIN_FAILURE;
             goto bail;
         }
     }
@@ -684,7 +738,6 @@ pam_passthru_postop(Slapi_PBlock *pb)
                     "<= pam_passthru_postop\n");
 
 bail:
-
     return ret;
 }
 

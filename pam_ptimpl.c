@@ -1,9 +1,38 @@
 /** BEGIN COPYRIGHT BLOCK
+ * This Program is free software; you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation; version 2 of the License.
+ * 
+ * This Program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License along with
+ * this Program; if not, write to the Free Software Foundation, Inc., 59 Temple
+ * Place, Suite 330, Boston, MA 02111-1307 USA.
+ * 
+ * In addition, as a special exception, Red Hat, Inc. gives You the additional
+ * right to link the code of this Program with code not covered under the GNU
+ * General Public License ("Non-GPL Code") and to distribute linked combinations
+ * including the two, subject to the limitations in this paragraph. Non-GPL Code
+ * permitted under this exception must only link to the code of this Program
+ * through those well defined interfaces identified in the file named EXCEPTION
+ * found in the source code files (the "Approved Interfaces"). The files of
+ * Non-GPL Code may instantiate templates or use macros or inline functions from
+ * the Approved Interfaces without causing the resulting work to be covered by
+ * the GNU General Public License. Only Red Hat, Inc. may make changes or
+ * additions to the list of Approved Interfaces. You must obey the GNU General
+ * Public License in all respects for all of the Program code and other code used
+ * in conjunction with the Program except the Non-GPL Code covered by this
+ * exception. If you modify this file, you may extend this exception to your
+ * version of the file, but you are not obligated to do so. If you do not wish to
+ * provide this exception without modification, you must delete this exception
+ * statement from your version and license this file solely under the GPL without
+ * exception. 
+ * 
+ * 
  * Copyright (C) 2005 Red Hat, Inc.
  * All rights reserved.
- *
- * License: GPL (version 3 or any later version).
- * See LICENSE for details. 
  * END COPYRIGHT BLOCK **/
 
 #ifdef HAVE_CONFIG_H
@@ -12,6 +41,9 @@
 
 
 #include <security/pam_appl.h>
+#include <nss/pk11func.h>
+#include <nss/nss.h>
+#include <nss/nssb64.h>
 
 #include "pam_passthru.h"
 
@@ -20,6 +52,9 @@
  * a critical section.  This is the lock that protects that code.
  */
 static Slapi_Mutex *PAMLock;
+static Slapi_Mutex *PAMCondLock;
+static Slapi_CondVar *PAMCond;
+static int pam_in_use;
 
 /* Utility struct to wrap strings to avoid mallocs if possible - use
    stack allocated string space */
@@ -111,6 +146,113 @@ derive_from_bind_entry(Slapi_PBlock *pb, const Slapi_DN *bindsdn,
 	slapi_entry_free(entry);
 
 	return pam_id->str;
+}
+
+static int
+do_weakpw_auth(Slapi_PBlock *pb, char *binddn, int pw_response_requested) 
+{
+	char buf[BUFSIZ];
+	char *weakpw = NULL;
+	Slapi_Entry *entry = NULL;
+	Slapi_DN *sdn = slapi_sdn_new_dn_byref(binddn);
+	char *attrs[] = { NULL, NULL, NULL };
+	attrs[0] = "cuniweakuserpassword";
+
+	int rc = slapi_search_internal_get_entry(sdn, NULL, &entry, 
+						 pam_passthruauth_get_plugin_identity());
+	slapi_sdn_free(&sdn);
+	if(rc != LDAP_SUCCESS) {
+		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+				"Could not find BIND dn %s\n",
+				escape_string(binddn, buf));
+		goto loser;
+	} else if(NULL == entry) {
+		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+				"Could not find entry for BIND dn %s\n",
+				escape_string(binddn, buf));
+		goto loser;
+	} else {
+		weakpw = slapi_entry_attr_get_charptr(entry, "cuniweakuserpassword");
+		if(NULL == weakpw) {
+			slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+					"Entry %s has no weak password attribute\n",
+					escape_string(binddn, buf));
+			rc = LDAP_NO_SUCH_OBJECT;
+			slapi_entry_free(entry);
+			goto loser;
+		}
+	}
+
+	/* verify password */
+	struct berval *creds = NULL;
+	slapi_pblock_get(pb, SLAPI_BIND_CREDENTIALS, &creds ); /* the password */
+	/* compare MD5 hash of the given credentials with stored password */
+	if(creds) {
+#define MD5_HASH_LEN 20
+		rc=LDAP_OPERATIONS_ERROR;
+		char * bver;
+		PK11Context *ctx=NULL;
+		unsigned int outLen;
+		unsigned char hash_out[MD5_HASH_LEN];
+		unsigned char b2a_out[MD5_HASH_LEN*2]; /* conservative */
+		SECItem binary_item;
+		
+		ctx = PK11_CreateDigestContext(SEC_OID_MD5);
+		if (ctx == NULL) {
+			slapi_log_error(SLAPI_LOG_PLUGIN, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+					"Could not create context for digest operation for password compare");
+			goto loser;
+		}
+		
+		/* create the hash */
+		PK11_DigestBegin(ctx);
+		PK11_DigestOp(ctx, creds->bv_val, creds->bv_len);
+		PK11_DigestFinal(ctx, hash_out, &outLen, sizeof hash_out);
+		PK11_DestroyContext(ctx, 1);
+		
+		/* convert the binary hash to base64 */
+		binary_item.data = hash_out;
+		binary_item.len = outLen;
+		bver = NSSBase64_EncodeItem(NULL, b2a_out, sizeof b2a_out, &binary_item);
+		/* bver points to b2a_out upon success */
+		if (bver) {
+			if(strcmp(bver, weakpw)) {
+				rc = LDAP_INVALID_CREDENTIALS;
+			} else {
+				long t;
+
+				switch(need_new_pw(pb, &t, entry, pw_response_requested)) {
+				case 1: /* expired */
+					/* not used anymore, AFAIK */
+					rc = LDAP_OPERATIONS_ERROR;
+					break;
+                                                
+				case 2: /* will expire soon */
+					rc = LDAP_SUCCESS;
+					break;
+
+				case -1: /* some internal error */
+					rc = LDAP_UNWILLING_TO_PERFORM;
+					goto loser;
+
+				default:
+					rc = LDAP_SUCCESS;
+					break;
+				} 
+			}
+		} else {
+			slapi_log_error(SLAPI_LOG_PLUGIN, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+					"Could not base64 encode hashed value for password compare");
+		}
+	} else {
+		rc = LDAP_OPERATIONS_ERROR;
+	}
+
+loser:
+	slapi_ch_free_string(&weakpw);
+	if(entry) slapi_entry_free(entry);
+
+	return rc;
 }
 
 static void
@@ -241,6 +383,7 @@ do_one_pam_auth(
 	struct pam_conv my_pam_conv = {pam_conv_func, NULL};
 	char *errmsg = NULL; /* free with PR_smprintf_free */
 	int locked = 0;
+	int result_sent = 1;
 
 	slapi_pblock_get( pb, SLAPI_BIND_TARGET_SDN, &bindsdn );
 	if (NULL == bindsdn) {
@@ -265,6 +408,20 @@ do_one_pam_auth(
 		goto done; /* skip the pam stuff */
 	}
 
+	if(strcmp(pam_service, "weakpassword") == 0) {
+		/* ugly site-specific hack for one specific pam service, which is not pam at all*/
+		retcode = do_weakpw_auth(pb, (char*)binddn, pw_response_requested);
+		if(LDAP_SUCCESS == retcode) {
+			errmsg = PR_smprintf("Weak password authentication for DN %s successful", binddn);
+		} else if(LDAP_UNWILLING_TO_PERFORM == retcode) {
+			result_sent = 1;
+			errmsg = PR_smprintf("Weak password authentication for DN %s:  account locked", binddn);
+		} else {
+			errmsg = PR_smprintf("Weak password authentication for DN %s failed", binddn);
+		}
+		goto done;
+	}
+
 	if (!pam_id.str) {
 		errmsg = PR_smprintf("Bind DN [%s] is invalid or not found", binddn);
 		retcode = LDAP_NO_SUCH_OBJECT; /* user unknown */
@@ -275,7 +432,28 @@ do_one_pam_auth(
 	my_data.pb = pb;
 	my_data.pam_identity = pam_id.str;
 	my_pam_conv.appdata_ptr = &my_data;
-	slapi_lock_mutex(PAMLock);
+
+	/* avoid blocking threads on PAMLock, give it a try and bail out if other thread 
+	   is holding the lock */
+	slapi_lock_mutex(PAMCondLock);
+	/* if pam is in use, wait */
+	if(pam_in_use) {
+		struct timeval tv;
+		tv.tv_sec = 30;
+		tv.tv_usec = 0;
+		slapi_wait_condvar(PAMCond, &tv);
+	}
+	/* if PAM is still locked, bail out */
+	if(pam_in_use) {
+		errmsg = PR_smprintf("PAM is blocked by another thread for more than 30 seconds, giving up");
+		retcode = LDAP_OPERATIONS_ERROR;
+		slapi_unlock_mutex(PAMCondLock);
+		goto done;
+	}
+	pam_in_use = 1;
+	slapi_unlock_mutex(PAMCondLock);
+
+        slapi_lock_mutex(PAMLock);
 	/* from this point on we are in the critical section */
 	rc = pam_start(pam_service, pam_id.str, &my_pam_conv, &pam_handle);
 	report_pam_error("during pam_start", rc, pam_handle);
@@ -360,6 +538,11 @@ do_one_pam_auth(
 	slapi_unlock_mutex(PAMLock);
 	/* not in critical section any more */
 
+	slapi_lock_mutex(PAMCondLock);
+	pam_in_use = 0;
+	slapi_notify_condvar(PAMCond, 0);
+	slapi_unlock_mutex(PAMCondLock);
+
 done:
 	delete_my_str_buf(&pam_id);
 
@@ -372,7 +555,7 @@ done:
 	if (retcode != LDAP_SUCCESS) {
 		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
 						"%s\n", errmsg);
-		if (final_method && !fallback) {
+		if (final_method && !fallback && !result_sent) {
 			slapi_send_ldap_result(pb, retcode, NULL, errmsg, 0, NULL);
 		}
 	}
@@ -394,15 +577,13 @@ pam_passthru_pam_init( void )
 	if (!(PAMLock = slapi_new_mutex())) {
 		return LDAP_LOCAL_ERROR;
 	}
-
-	return 0;
-}
-
-int
-pam_passthru_pam_free( void )
-{
-	slapi_destroy_mutex(PAMLock);
-	PAMLock = NULL;
+	if (!(PAMCondLock = slapi_new_mutex())) {
+		return LDAP_LOCAL_ERROR;
+	}
+	if (!(PAMCond = slapi_new_condvar(PAMCondLock))) {
+		return LDAP_LOCAL_ERROR;
+	}
+	pam_in_use = 0;
 
 	return 0;
 }
