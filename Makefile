@@ -41,20 +41,19 @@
 #
 #
 
-LDAP_ROOT = /opt/fedora-ds
-LDAP_SRC = /usr/local/src/dsbuild-fds102/ds/ldapserver/work/fedora-ds-1.0.2
-LDAP_BUILD = /usr/local/src/dsbuild-fds102/ds/ldapserver/work/fedora-ds-1.0.2/built/Linux2.4_x86_glibc_PTH_OPT.OBJ
 CC=gcc
 LD=ld
 
-INCLUDES += -I$(LDAP_ROOT)/plugins/slapd/slapi/include \
-	    -I$(LDAP_SRC)/ldap/include \
-	    -I$(LDAP_SRC)/ldap/servers/slapd \
-            -I$(LDAP_SRC)/../../../mozilla/work/mozilla/dist/public/nss/ \
-	    -I$(LDAP_BUILD)/include 
+INCLUDES_DIRSRV = $(shell pkg-config --cflags dirsrv)
+LIBS_DIRSRV = $(shell pkg-config --libs dirsrv)
+INCLUDES_NSPR = $(shell pkg-config --cflags nspr)
+LIBS_NSPR = $(shell pkg-config --libs nspr)
+
+INCLUDES = $(INCLUDES_DIRSRV) $(INCLUDES_NSPR) -I.
+
 CFLAGS= $(INCLUDES) -g -D_REENTRANT -fPIC
 LDFLAGS=
-LIBS=
+LIBS=$(LIBS_DIRSRV) $(LIBS_NSPR)
 
 OBJS=pam_ptimpl.o pam_ptconfig.o pam_ptdebug.o pam_ptpreop.o
 LOBJS=$(OBJS:.o=.lo)
