@@ -10,6 +10,9 @@
 #  include <config.h>
 #endif
 
+#define VENDOR "CUNI"
+#define DS_PACKAGE_VERSION "1.3.5"
+
 /*
  * pamptpreop.c - bind pre-operation plugin for Pass Through Authentication to PAM
  *
