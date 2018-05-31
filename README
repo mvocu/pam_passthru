@@ -1,39 +1,10 @@
 #
 # BEGIN COPYRIGHT BLOCK
-# This Program is free software; you can redistribute it and/or modify it under
-# the terms of the GNU General Public License as published by the Free Software
-# Foundation; version 2 of the License.
-# 
-# This Program is distributed in the hope that it will be useful, but WITHOUT
-# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-# 
-# You should have received a copy of the GNU General Public License along with
-# this Program; if not, write to the Free Software Foundation, Inc., 59 Temple
-# Place, Suite 330, Boston, MA 02111-1307 USA.
-# 
-# In addition, as a special exception, Red Hat, Inc. gives You the additional
-# right to link the code of this Program with code not covered under the GNU
-# General Public License ("Non-GPL Code") and to distribute linked combinations
-# including the two, subject to the limitations in this paragraph. Non-GPL Code
-# permitted under this exception must only link to the code of this Program
-# through those well defined interfaces identified in the file named EXCEPTION
-# found in the source code files (the "Approved Interfaces"). The files of
-# Non-GPL Code may instantiate templates or use macros or inline functions from
-# the Approved Interfaces without causing the resulting work to be covered by
-# the GNU General Public License. Only Red Hat, Inc. may make changes or
-# additions to the list of Approved Interfaces. You must obey the GNU General
-# Public License in all respects for all of the Program code and other code used
-# in conjunction with the Program except the Non-GPL Code covered by this
-# exception. If you modify this file, you may extend this exception to your
-# version of the file, but you are not obligated to do so. If you do not wish to
-# provide this exception without modification, you must delete this exception
-# statement from your version and license this file solely under the GPL without
-# exception. 
-# 
-# 
 # Copyright (C) 2005 Red Hat, Inc.
 # All rights reserved.
+#
+# License: GPL (version 3 or any later version).
+# See LICENSE for details. 
 # END COPYRIGHT BLOCK
 #
 PAM pass through authentication plugin for Directory Server
@@ -86,7 +57,7 @@ which is one of the objectclasses of the plugin entry:
 * pamIDAttr (string) - The value of this attribute, present in the
 	user's entry, holds the PAM identity of the user - it maps the LDAP
 	identity to the PAM identity
-* pamMapMethod (string)
+* pamIDMapMethod (string)
       o RDN (default) - uses the value from the leftmost RDN in the BIND DN
       o ENTRY - gets the value of the PAM identity attribute from the BIND DN entry
       o DN - uses the full DN string
@@ -137,13 +108,13 @@ to avoid it if possible.
 We may have to worry about different PAM policy in different subtrees
 e.g. maybe for dc=coke,dc=com you want to use the ENTRY map method,
 but for dc=pepsi,dc=com you want to use the RDN method. We could
-probably do this by having the pamMapMethod attr be multivalued, and
+probably do this by having the pamIDMapMethod attr be multivalued, and
 have it's value like this:
 
-pamMapMethod: RDN dc=coke,dc=com
-pamMapMethod: RDN dc=sprite,dc=com
-pamMapMethod: ENTRY dc=pepsi,dc=com
-pamMapMethod: DN (the default for all other suffixes)
+pamIDMapMethod: RDN dc=coke,dc=com
+pamIDMapMethod: RDN dc=sprite,dc=com
+pamIDMapMethod: ENTRY dc=pepsi,dc=com
+pamIDMapMethod: DN (the default for all other suffixes)
 
 The suffix that uses that map method would follow the map method used.
 
@@ -155,7 +126,9 @@ values when the password has expired. So we need to call
 pam_acct_mgmt() somewhere during the pam handshakes and before
 pam_end() to get this information. We also try to return an
 appropriate LDAP error code.
+
 PAM Error Code			LDAP Error Code				Meaning
+==============          ===============             =======
 PAM_USER_UNKNOWN		LDAP_NO_SUCH_OBJECT			User ID does not exist
 PAM_AUTH_ERROR			LDAP_INVALID_CREDENTIALS	Password is not correct
 PAM_ACCT_EXPIRED		LDAP_INVALID_CREDENTIALS	User's password is expired
@@ -163,6 +136,7 @@ PAM_PERM_DENIED			LDAP_UNWILLING_TO_PERFORM	User's account is locked out
 PAM_NEW_AUTHTOK_REQD	LDAP_INVALID_CREDENTIALS	User's password has expired and must be renewed
 PAM_MAXTRIES			LDAP_CONSTRAINT_VIOLATION	Max retry count has been exceeded
 Other codes				LDAP_OPERATIONS_ERROR		PAM config is incorrect, machine problem, etc.
+
 There are three controls we might possibly add to the response:
 * the auth response control - returned upon success - contains the BIND DN (u: not currently supported)
 * LDAP_CONTROL_PWEXPIRED - returned when PAM reports ACCT_EXPIRED or NEW_AUTHTOK_REQD
@@ -182,7 +156,7 @@ Configuration
 
 1. Shutdown the server
 2. Make sure the slapd-instance/config/schema contains the 60pam-config.ldif file
-3. Make sure serverroot/lib/pam-passthru-plugin.so exists
+3. Make sure plugindir/libpam-passthru-plugin.so exists
 4. Make sure /etc/pam.d/ldapserver exists and is configured correctly
 5. If the configuration is not already in dse.ldif, append the following to slapd-instance/config/dse.ldif
 
@@ -192,7 +166,7 @@ objectclass: nsSlapdPlugin
 objectclass: extensibleObject
 objectclass: pamConfig
 cn: PAM Pass Through Auth
-nsslapd-pluginpath: /opt/ldapserver/lib/pam-passthru-plugin.so
+nsslapd-pluginpath: /path/to/libpam-passthru-plugin.so
 nsslapd-plugininitfunc: pam_passthruauth_init
 nsslapd-plugintype: preoperation
 nsslapd-pluginenabled: on
@@ -201,7 +175,7 @@ nsslapd-plugin-depends-on-type: database
 pamMissingSuffix: ALLOW
 pamExcludeSuffix: o=NetscapeRoot
 pamExcludeSuffix: cn=config
-pamMapMethod: RDN
+pamIDMapMethod: RDN
 pamFallback: FALSE
 pamSecure: TRUE
 pamService: ldapserver
@@ -210,7 +184,25 @@ Make sure there is a blank line at the end. The line with
 o=NetscapeRoot may be omitted if this is not a configuration DS. Then
 restart slapd.
 
+Testing
+
+I find it convenient to just test against regular /etc/passwd accounts.
+0) Create a server instance with suffix dc=example,dc=com and load the Example.ldif file
+1) cd /etc/pam.d
+2) cp system-auth ldapserver (make sure ldapserver is readable by nobody or whatever your ldap server account is)
+3) useradd scarter (or any uid from Example.ldif)
+4) passwd scarter - use a different password than the LDAP password
+5) Make sure /etc/shadow is readable by nobody or whatever your ldap server account is
+
+You might want to turn off pamSecure for testing purposes unless you have already set up your server and ldap clients to use TLS.
+
+Then you can run a test like this:
+ldapsearch -x -D "uid=scarter,ou=people,dc=example,dc=com" -w thepassword -s base -b ""
+
+Check /var/log/secure for any PAM authentication failures
+
 See Also
+
 PAM API for Linux http://www.kernel.org/pub/linux/libs/pam/Linux-PAM-html/pam_appl.html
 PAM API for Solaris Writing PAM Applications and Services from the Solaris Security for Developers Guide http://docs.sun.com/app/docs/doc/816-4863/6mb20lvfh?a=view
 PAM API for HP-UX http://docs.hp.com/en/B2355-60103/pam.3.html

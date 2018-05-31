@@ -1,39 +1,15 @@
 /** BEGIN COPYRIGHT BLOCK
- * This Program is free software; you can redistribute it and/or modify it under
- * the terms of the GNU General Public License as published by the Free Software
- * Foundation; version 2 of the License.
- * 
- * This Program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
- * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
- * 
- * You should have received a copy of the GNU General Public License along with
- * this Program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place, Suite 330, Boston, MA 02111-1307 USA.
- * 
- * In addition, as a special exception, Red Hat, Inc. gives You the additional
- * right to link the code of this Program with code not covered under the GNU
- * General Public License ("Non-GPL Code") and to distribute linked combinations
- * including the two, subject to the limitations in this paragraph. Non-GPL Code
- * permitted under this exception must only link to the code of this Program
- * through those well defined interfaces identified in the file named EXCEPTION
- * found in the source code files (the "Approved Interfaces"). The files of
- * Non-GPL Code may instantiate templates or use macros or inline functions from
- * the Approved Interfaces without causing the resulting work to be covered by
- * the GNU General Public License. Only Red Hat, Inc. may make changes or
- * additions to the list of Approved Interfaces. You must obey the GNU General
- * Public License in all respects for all of the Program code and other code used
- * in conjunction with the Program except the Non-GPL Code covered by this
- * exception. If you modify this file, you may extend this exception to your
- * version of the file, but you are not obligated to do so. If you do not wish to
- * provide this exception without modification, you must delete this exception
- * statement from your version and license this file solely under the GPL without
- * exception. 
- * 
- * 
  * Copyright (C) 2005 Red Hat, Inc.
  * All rights reserved.
+ *
+ * License: GPL (version 3 or any later version).
+ * See LICENSE for details. 
  * END COPYRIGHT BLOCK **/
+
+#ifdef HAVE_CONFIG_H
+#  include <config.h>
+#endif
+
 /*
  * pam_passthru.h - Pass Through Authentication shared definitions
  *
@@ -48,8 +24,6 @@
 #include <sys/types.h>
 #include "portable.h"
 #include "slapi-plugin.h"
-#include <dirlite_strings.h> /* PLUGIN_MAGIC_VENDOR_STR */
-#include "dirver.h"
 #include <nspr.h>
 
 /* Private API: to get slapd_pr_strerror() and SLAPI_COMPONENT_NAME_NSPR */
@@ -58,14 +32,24 @@
 /*
  * macros
  */
-#define PAM_PASSTHRU_PLUGIN_SUBSYSTEM	"pam_passthru-plugin"   /* for logging */
+#define PAM_PASSTHRU_PLUGIN_SUBSYSTEM   "pam_passthru-plugin"   /* for logging */
+#define PAM_PASSTHRU_INT_POSTOP_DESC    "PAM Passthru internal postop plugin"
+#define PAM_PASSTHRU_PREOP_DESC         "PAM Passthru preop plugin"
+#define PAM_PASSTHRU_POSTOP_DESC        "PAM Passthru postop plugin"
 
 #define PAM_PASSTHRU_ASSERT( expr )		PR_ASSERT( expr )
 
 #define PAM_PASSTHRU_OP_NOT_HANDLED		0
 #define PAM_PASSTHRU_OP_HANDLED		1
+#define PAM_PASSTHRU_SUCCESS 0
+#define PAM_PASSTHRU_FAILURE -1
 
 /* #define	PAM_PASSTHRU_VERBOSE_LOGGING	*/
+
+/*
+ * Plug-in globals
+ */
+extern PRCList *pam_passthru_global_config;
 
 /*
  * structs
@@ -84,22 +68,24 @@ typedef struct pam_passthrusuffix {
 #define PAMPT_MISSING_SUFFIX_IGNORE_STRING "IGNORE"
 
 typedef struct pam_passthruconfig {
-	Slapi_Mutex *lock; /* for config access */
-	Pam_PassthruSuffix *pamptconfig_includes; /* list of suffixes to include in this op */
-	Pam_PassthruSuffix *pamptconfig_excludes; /* list of suffixes to exclude in this op */
-	PRBool pamptconfig_fallback; /* if false, failure here fails entire bind */
-	                             /* if true, failure here falls through to regular bind */
-	PRBool pamptconfig_secure; /* if true, plugin only operates on secure connections */
-	char *pamptconfig_pam_ident_attr; /* name of attribute in user entry for ENTRY map method */
-	int pamptconfig_map_method1; /* how to map the BIND DN to the PAM identity */
-	int pamptconfig_map_method2; /* how to map the BIND DN to the PAM identity */
-	int pamptconfig_map_method3; /* how to map the BIND DN to the PAM identity */
+    PRCList list;
+    char *dn;
+    Pam_PassthruSuffix *pamptconfig_includes; /* list of suffixes to include in this op */
+    Pam_PassthruSuffix *pamptconfig_excludes; /* list of suffixes to exclude in this op */
+    char *filter_str; /* search filter used to identify bind entries to include in this op */
+    Slapi_Filter *slapi_filter; /* a Slapi_Filter version of the above filter */
+    PRBool pamptconfig_fallback; /* if false, failure here fails entire bind */
+                                 /* if true, failure here falls through to regular bind */
+    PRBool pamptconfig_secure; /* if true, plugin only operates on secure connections */
+    char *pamptconfig_pam_ident_attr; /* name of attribute in user entry for ENTRY map method */
+    int pamptconfig_map_method1; /* how to map the BIND DN to the PAM identity */
+    int pamptconfig_map_method2; /* how to map the BIND DN to the PAM identity */
+    int pamptconfig_map_method3; /* how to map the BIND DN to the PAM identity */
 #define PAMPT_MAP_METHOD_NONE -1 /* do not map */
 #define PAMPT_MAP_METHOD_DN 0 /* use the full DN as the PAM identity */
 #define PAMPT_MAP_METHOD_RDN 1 /* use the leftmost RDN value as the PAM identity */
 #define PAMPT_MAP_METHOD_ENTRY 2 /* use the PAM identity attribute in the entry */
-	char *pamptconfig_service; /* the PAM service name for pam_start() */
-	char *pamptconfig_service_attr; /* name of attribute containing PAM service in user entry */
+    char *pamptconfig_service; /* the PAM service name for pam_start() */
 } Pam_PassthruConfig;
 
 #define PAMPT_MAP_METHOD_DN_STRING "DN"
@@ -110,29 +96,42 @@ typedef struct pam_passthruconfig {
 #define PAMPT_EXCLUDES_ATTR "pamExcludeSuffix" /* multi valued */
 #define PAMPT_INCLUDES_ATTR "pamIncludeSuffix" /* multi valued */
 #define PAMPT_PAM_IDENT_ATTR "pamIDAttr" /* single valued (for now) */
-#define PAMPT_MAP_METHOD_ATTR "pamMapMethod" /* single valued */
+#define PAMPT_MAP_METHOD_ATTR "pamIDMapMethod" /* single valued */
 #define PAMPT_FALLBACK_ATTR "pamFallback" /* single */
 #define PAMPT_SECURE_ATTR "pamSecure" /* single */
 #define PAMPT_SERVICE_ATTR "pamService" /* single */
-#define PAMPT_SERVICE_ATTR_ATTR "pamServiceAttr" /* single */
+#define PAMPT_FILTER_ATTR "pamFilter" /* single */
+
 /*
  * public functions
  */
 
 void pam_passthruauth_set_plugin_identity(void * identity);
 void * pam_passthruauth_get_plugin_identity();
+void pam_passthruauth_set_plugin_sdn(const Slapi_DN *plugin_sdn);
+const Slapi_DN *pam_passthruauth_get_plugin_sdn();
+const char *pam_passthruauth_get_plugin_dn();
+void pam_passthru_read_lock();
+void pam_passthru_write_lock();
+void pam_passthru_unlock();
 
 /*
  * pam_ptconfig.c:
  */
-int pam_passthru_config( Slapi_Entry *config_e );
-Pam_PassthruConfig *pam_passthru_get_config( void );
-int pam_passthru_check_suffix(Pam_PassthruConfig *cfg, char *binddn);
+int pam_passthru_load_config(int skip_validate);
+void pam_passthru_delete_config();
+Pam_PassthruConfig *pam_passthru_get_config( Slapi_DN *bind_sdn );
+int pam_passthru_validate_config (Slapi_Entry* e, char *returntext);
+int pam_passthru_dn_is_config(Slapi_DN *sdn);
+void pam_passthru_set_config_area(Slapi_DN *sdn);
+Slapi_DN* pam_passthru_get_config_area();
+void pam_passthru_free_config_area();
 
 /*
  * pam_ptimpl.c
  */
 int pam_passthru_pam_init( void );
+int pam_passthru_pam_free( void );
 int pam_passthru_do_pam_auth(Slapi_PBlock *pb, Pam_PassthruConfig *cfg);
 
 #endif	/* _PAM_PASSTHRU_H_ */
