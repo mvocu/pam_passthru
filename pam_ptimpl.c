@@ -35,6 +35,11 @@
  * All rights reserved.
  * END COPYRIGHT BLOCK **/
 
+#ifdef HAVE_CONFIG_H
+#  include <config.h>
+#endif
+
+
 #include <security/pam_appl.h>
 
 #include "pam_passthru.h"
@@ -72,7 +77,7 @@ static void
 delete_my_str_buf(MyStrBuf *buf)
 {
 	if (buf->str != buf->fixbuf) {
-		slapi_ch_free_string(&buf->str);
+		slapi_ch_free_string(&(buf->str));
 	}
 }
 
@@ -86,13 +91,13 @@ struct my_pam_conv_str {
  * Get the PAM identity from the value of the leftmost RDN in the BIND DN.
  */
 static char *
-derive_from_bind_dn(Slapi_PBlock *pb, char *binddn, MyStrBuf *pam_id)
+derive_from_bind_dn(Slapi_PBlock *pb, const Slapi_DN *bindsdn, MyStrBuf *pam_id)
 {
 	Slapi_RDN *rdn;
 	char *type = NULL;
 	char *value = NULL;
 
-	rdn = slapi_rdn_new_dn(binddn);
+	rdn = slapi_rdn_new_sdn(bindsdn);
 	slapi_rdn_get_first(rdn, &type, &value);
 	init_my_str_buf(pam_id, value);
 	slapi_rdn_free(&rdn);
@@ -101,28 +106,31 @@ derive_from_bind_dn(Slapi_PBlock *pb, char *binddn, MyStrBuf *pam_id)
 }
 
 static char *
-derive_from_bind_entry(Slapi_PBlock *pb, char *binddn, MyStrBuf *pam_id, char *map_ident_attr)
+derive_from_bind_entry(Slapi_PBlock *pb, const Slapi_DN *bindsdn, 
+                       MyStrBuf *pam_id, char *map_ident_attr, int *locked)
 {
-	char buf[BUFSIZ];
 	Slapi_Entry *entry = NULL;
-	Slapi_DN *sdn = slapi_sdn_new_dn_byref(binddn);
 	char *attrs[] = { NULL, NULL };
 	attrs[0] = map_ident_attr;
-	int rc = slapi_search_internal_get_entry(sdn, attrs, &entry,
+	int rc = slapi_search_internal_get_entry((Slapi_DN *)bindsdn, attrs, &entry,
 											 pam_passthruauth_get_plugin_identity());
-
-	slapi_sdn_free(&sdn);
 
 	if (rc != LDAP_SUCCESS) {
 		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
 						"Could not find BIND dn %s (error %d - %s)\n",
-						escape_string(binddn, buf), rc, ldap_err2string(rc));
+						slapi_sdn_get_ndn(bindsdn), rc, ldap_err2string(rc));
 		init_my_str_buf(pam_id, NULL);
    	} else if (NULL == entry) {
 		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
 						"Could not find entry for BIND dn %s\n",
-						escape_string(binddn, buf));
+						slapi_sdn_get_ndn(bindsdn));
 		init_my_str_buf(pam_id, NULL);
+	} else if (slapi_check_account_lock( pb, entry, 0, 0, 0 ) == 1) {
+		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+						"Account %s inactivated.\n",
+						slapi_sdn_get_ndn(bindsdn));
+		init_my_str_buf(pam_id, NULL);
+		*locked = 1;
 	} else {
 		char *val = slapi_entry_attr_get_charptr(entry, map_ident_attr);
 		init_my_str_buf(pam_id, val);
@@ -147,7 +155,7 @@ report_pam_error(char *str, int rc, pam_handle_t *pam_handle)
 /* returns a berval value as a null terminated string */
 static char *strdupbv(struct berval *bv)
 {
-	char *str = malloc(bv->bv_len+1);
+	char *str = slapi_ch_malloc(bv->bv_len+1);
 	memcpy(str, bv->bv_val, bv->bv_len);
 	str[bv->bv_len] = 0;
 	return str;
@@ -159,10 +167,10 @@ free_pam_response(int nresp, struct pam_response *resp)
 	int ii;
 	for (ii = 0; ii < nresp; ++ii) {
 		if (resp[ii].resp) {
-			free(resp[ii].resp);
+			slapi_ch_free((void **)&(resp[ii].resp));
 		}
 	}
-	free(resp);
+	slapi_ch_free((void **)&resp);
 }
 
 /*
@@ -185,7 +193,7 @@ pam_conv_func(int num_msg, const struct pam_message **msg, struct pam_response *
 	}
 
 	/* empty reply structure */
-    reply = (struct pam_response *)calloc(num_msg,
+    reply = (struct pam_response *)slapi_ch_calloc(num_msg,
 										  sizeof(struct pam_response));
 	slapi_pblock_get( my_data->pb, SLAPI_BIND_CREDENTIALS, &creds ); /* the password */
 	for (ii = 0; ii < num_msg; ++ii) {
@@ -201,7 +209,7 @@ pam_conv_func(int num_msg, const struct pam_message **msg, struct pam_response *
 			reply[ii].resp = strdupbv(creds);
 #endif
 		} else if (msg[ii]->msg_style == PAM_PROMPT_ECHO_ON) { /* assume username */
-			reply[ii].resp = strdup(my_data->pam_identity);
+			reply[ii].resp = slapi_ch_strdup(my_data->pam_identity);
 		} else if (msg[ii]->msg_style == PAM_ERROR_MSG) {
 			slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
 							"pam msg [%d] error [%s]\n", ii, msg[ii]->msg);
@@ -253,23 +261,43 @@ do_one_pam_auth(
 )
 {
 	MyStrBuf pam_id;
-	char *binddn = NULL;
-	int rc;
+	const char *binddn = NULL;
+	Slapi_DN *bindsdn = NULL;
+	int rc = PAM_SUCCESS;
 	int retcode = LDAP_SUCCESS;
 	pam_handle_t *pam_handle;
 	struct my_pam_conv_str my_data;
 	struct pam_conv my_pam_conv = {pam_conv_func, NULL};
-	char buf[BUFSIZ]; /* for error messages */
 	char *errmsg = NULL; /* free with PR_smprintf_free */
+	int locked = 0;
 
-	slapi_pblock_get( pb, SLAPI_BIND_TARGET, &binddn );
+	slapi_pblock_get( pb, SLAPI_BIND_TARGET_SDN, &bindsdn );
+	if (NULL == bindsdn) {
+		errmsg = PR_smprintf("Null bind dn");
+		retcode = LDAP_OPERATIONS_ERROR;
+		pam_id.str = NULL; /* initialize pam_id.str */
+		goto done; /* skip the pam stuff */
+	}
+	binddn = slapi_sdn_get_dn(bindsdn);
 
 	if (method == PAMPT_MAP_METHOD_RDN) {
-		derive_from_bind_dn(pb, binddn, &pam_id);
+		derive_from_bind_dn(pb, bindsdn, &pam_id);
 	} else if (method == PAMPT_MAP_METHOD_ENTRY) {
-		derive_from_bind_entry(pb, binddn, &pam_id, map_ident_attr);
+		derive_from_bind_entry(pb, bindsdn, &pam_id, map_ident_attr, &locked);
 	} else {
 		init_my_str_buf(&pam_id, binddn);
+	}
+
+	if (locked) {
+		errmsg = PR_smprintf("Account inactivated. Contact system administrator.");
+		retcode = LDAP_UNWILLING_TO_PERFORM; /* user inactivated */
+		goto done; /* skip the pam stuff */
+	}
+
+	if (!pam_id.str) {
+		errmsg = PR_smprintf("Bind DN [%s] is invalid or not found", binddn);
+		retcode = LDAP_NO_SUCH_OBJECT; /* user unknown */
+		goto done; /* skip the pam stuff */
 	}
 
 	/* do the pam stuff */
@@ -288,23 +316,23 @@ do_one_pam_auth(
 		/* check different types of errors here */
 		if (rc == PAM_USER_UNKNOWN) {
 			errmsg = PR_smprintf("User id [%s] for bind DN [%s] does not exist in PAM",
-								 pam_id.str, escape_string(binddn, buf));
+								 pam_id.str, binddn);
 			retcode = LDAP_NO_SUCH_OBJECT; /* user unknown */
 		} else if (rc == PAM_AUTH_ERR) {
 			errmsg = PR_smprintf("Invalid PAM password for user id [%s], bind DN [%s]",
-								 pam_id.str, escape_string(binddn, buf));
+								 pam_id.str, binddn);
 			retcode = LDAP_INVALID_CREDENTIALS; /* invalid creds */
 		} else if (rc == PAM_MAXTRIES) {
 			errmsg = PR_smprintf("Authentication retry limit exceeded in PAM for "
 								 "user id [%s], bind DN [%s]",
-								 pam_id.str, escape_string(binddn, buf));
+								 pam_id.str, binddn);
 			if (pw_response_requested) {
 				slapi_pwpolicy_make_response_control(pb, -1, -1, LDAP_PWPOLICY_ACCTLOCKED);
 			}
 			retcode = LDAP_CONSTRAINT_VIOLATION; /* max retries */
 		} else if (rc != PAM_SUCCESS) {
 			errmsg = PR_smprintf("Unknown PAM error [%s] for user id [%s], bind DN [%s]",
-								 pam_strerror(pam_handle, rc), pam_id.str, escape_string(binddn, buf));
+								 pam_strerror(pam_handle, rc), pam_id.str, binddn);
 			retcode = LDAP_OPERATIONS_ERROR; /* pam config or network problem */
 		}
 	}
@@ -317,16 +345,16 @@ do_one_pam_auth(
 		/* check different types of errors here */
 		if (rc == PAM_USER_UNKNOWN) {
 			errmsg = PR_smprintf("User id [%s] for bind DN [%s] does not exist in PAM",
-								 pam_id.str, escape_string(binddn, buf));
+								 pam_id.str, binddn);
 			retcode = LDAP_NO_SUCH_OBJECT; /* user unknown */
 		} else if (rc == PAM_AUTH_ERR) {
 			errmsg = PR_smprintf("Invalid PAM password for user id [%s], bind DN [%s]",
-								 pam_id.str, escape_string(binddn, buf));
+								 pam_id.str, binddn);
 			retcode = LDAP_INVALID_CREDENTIALS; /* invalid creds */
 		} else if (rc == PAM_PERM_DENIED) {
 			errmsg = PR_smprintf("Access denied for PAM user id [%s], bind DN [%s]"
 								 " - see administrator",
-								 pam_id.str, escape_string(binddn, buf));
+								 pam_id.str, binddn);
 			if (pw_response_requested) {
 				slapi_pwpolicy_make_response_control(pb, -1, -1, LDAP_PWPOLICY_ACCTLOCKED);
 			}
@@ -334,7 +362,7 @@ do_one_pam_auth(
 		} else if (rc == PAM_ACCT_EXPIRED) {
 			errmsg = PR_smprintf("Expired PAM password for user id [%s], bind DN [%s]: "
 								 "reset required",
-								 pam_id.str, escape_string(binddn, buf));
+								 pam_id.str, binddn);
 			slapi_add_pwd_control(pb, LDAP_CONTROL_PWEXPIRED, 0);
 			if (pw_response_requested) {
 				slapi_pwpolicy_make_response_control(pb, -1, -1, LDAP_PWPOLICY_PWDEXPIRED);
@@ -343,7 +371,7 @@ do_one_pam_auth(
 		} else if (rc == PAM_NEW_AUTHTOK_REQD) { /* handled same way as ACCT_EXPIRED */
 			errmsg = PR_smprintf("Expired PAM password for user id [%s], bind DN [%s]: "
 								 "reset required",
-								 pam_id.str, escape_string(binddn, buf));
+								 pam_id.str, binddn);
 			slapi_add_pwd_control(pb, LDAP_CONTROL_PWEXPIRED, 0);
 			if (pw_response_requested) {
 				slapi_pwpolicy_make_response_control(pb, -1, -1, LDAP_PWPOLICY_PWDEXPIRED);
@@ -351,7 +379,7 @@ do_one_pam_auth(
 			retcode = LDAP_INVALID_CREDENTIALS;
 		} else if (rc != PAM_SUCCESS) {
 			errmsg = PR_smprintf("Unknown PAM error [%s] for user id [%s], bind DN [%s]",
-								 pam_strerror(pam_handle, rc), pam_id.str, escape_string(binddn, buf));
+								 pam_strerror(pam_handle, rc), pam_id.str, binddn);
 			retcode = LDAP_OPERATIONS_ERROR; /* unknown */
 		}
 	}
@@ -361,11 +389,12 @@ do_one_pam_auth(
 	slapi_unlock_mutex(PAMLock);
 	/* not in critical section any more */
 
+done:
 	delete_my_str_buf(&pam_id);
 
 	if ((retcode == LDAP_SUCCESS) && (rc != PAM_SUCCESS)) {
-		errmsg = PR_smprintf("Unknown PAM error [%d] for user id [%d], bind DN [%s]",
-							 rc, pam_id.str, escape_string(binddn, buf));
+		errmsg = PR_smprintf("Unknown PAM error [%d] for user id [%s], bind DN [%s]",
+							 rc, pam_id.str, binddn);
 		retcode = LDAP_OPERATIONS_ERROR;
 	}
 
@@ -416,10 +445,7 @@ pam_passthru_do_pam_auth(Slapi_PBlock *pb, Pam_PassthruConfig *cfg)
 	int pw_response_requested;
 	LDAPControl **reqctrls = NULL;
 
-	/* first lock and get the methods and other info */
-	/* we do this so we can acquire and release the lock quickly to
-	   avoid potential deadlocks */
-	slapi_lock_mutex(cfg->lock);
+	/* get the methods and other info */
 	method1 = cfg->pamptconfig_map_method1;
 	method2 = cfg->pamptconfig_map_method2;
 	method3 = cfg->pamptconfig_map_method3;
@@ -428,8 +454,6 @@ pam_passthru_do_pam_auth(Slapi_PBlock *pb, Pam_PassthruConfig *cfg)
 	init_my_str_buf(&pam_service, cfg->pamptconfig_service);
 
 	fallback = cfg->pamptconfig_fallback;
-
-	slapi_unlock_mutex(cfg->lock);
 
 	slapi_pblock_get (pb, SLAPI_REQCONTROLS, &reqctrls);
 	slapi_pblock_get (pb, SLAPI_PWPOLICY, &pw_response_requested);

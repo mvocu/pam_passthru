@@ -34,6 +34,11 @@
  * Copyright (C) 2005 Red Hat, Inc.
  * All rights reserved.
  * END COPYRIGHT BLOCK **/
+
+#ifdef HAVE_CONFIG_H
+#  include <config.h>
+#endif
+
 #include "ldap.h"
 #include "lber.h"
 #include "passthru.h"
@@ -138,6 +143,7 @@ void LDAPDebug( int level, char* fmt, ... )
 		va_list ap;
 		va_start (ap, fmt);
 		_snprintf (debugBuf, sizeof(debugBuf), fmt, ap);
+		debugBuf[sizeof(debugBuf)-1] = 0;
 		va_end (ap);
 
 		OutputDebugString (debugBuf);
