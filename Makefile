@@ -41,83 +41,38 @@
 #
 #
 
-LDAP_SRC = ../../..
-BUILD_ROOT = ../../../..
-
-NOSTDCLEAN=true # don't let nsconfig.mk define target clean
-NOSTDSTRIP=true # don't let nsconfig.mk define target strip
-NSPR20=true	# probably should be defined somewhere else (not sure where)
-
-OBJDEST = $(OBJDIR)/lib/libpam_passthru
-LIBDIR = $(LIB_RELDIR)
-
-include $(BUILD_ROOT)/nsconfig.mk
-include $(LDAP_SRC)/nsldap.mk
-
-ifeq ($(ARCH), WINNT)
-DEF_FILE:=./libpam_passthru.def
-endif
-
-CFLAGS+=$(SLCFLAGS)
-
-INCLUDES += -I$(LDAP_SRC)/servers/slapd
-
-PAM_PASSTHRU_OBJS=	pam_ptimpl.o pam_ptconfig.o pam_ptdebug.o pam_ptpreop.o
-
-OBJS = $(addprefix $(OBJDEST)/, $(PAM_PASSTHRU_OBJS)) 
-
-ifeq ($(ARCH), WINNT)
-LIBPAM_PASSTHRU_DLL_OBJ = $(addprefix $(OBJDEST)/, pam_ptdllmain.o)
-endif
-
-LIBPAM_PASSTHRU=	$(addprefix $(LIBDIR)/, $(PAM_PASSTHRU_DLL).$(DLL_SUFFIX))
-
-EXTRA_LIBS += -lpam
-#LD += -Xlinker --no-undefined -Xlinker --no-allow-shlib-undefined
-#LD += -Xlinker --export-dynamic
-
-ifeq ($(ARCH), WINNT)
-EXTRA_LIBS_DEP += $(LIBSLAPD_DEP)
-EXTRA_LIBS_DEP += $(LDAPSDK_DEP) $(NSPR_DEP)
-EXTRA_LIBS += $(LIBSLAPD) $(LDAP_SDK_LIBLDAP_DLL) $(NSPRLINK)
-endif
-
-
-ifeq ($(ARCH), WINNT)
-DLL_LDFLAGS += -def:"./libpam_passthru.def"
-endif # WINNT
-
-ifeq ($(ARCH), AIX)
-EXTRA_LIBS_DEP += $(LIBSLAPD_DEP)
-EXTRA_LIBS_DEP += $(LDAPSDK_DEP) $(NSPR_DEP)
-EXTRA_LIBS += $(LIBSLAPDLINK) $(LDAP_SDK_LIBLDAP_DLL) $(NSPRLINK)
-EXTRA_LIBS += $(DLL_EXTRA_LIBS) 
+LDAP_ROOT = /opt/fedora-ds
+LDAP_SRC = /usr/local/src/dsbuild-fds102/ds/ldapserver/work/fedora-ds-1.0.2
+LDAP_BUILD = /usr/local/src/dsbuild-fds102/ds/ldapserver/work/fedora-ds-1.0.2/built/Linux2.4_x86_glibc_PTH_OPT.OBJ
+CC=gcc
 LD=ld
-endif
 
-ifeq ($(ARCH), HPUX)
-EXTRA_LIBS_DEP += $(LIBSLAPD_DEP) $(LDAPSDK_DEP) $(NSPR_DEP) $(SECURITY_DEP)
-EXTRA_LIBS += $(DYN_NSHTTPD) $(ADMINUTIL_LINK) $(LDAPLINK) $(SECURITYLINK) $(NSPRLINK) $(ICULINK)
-endif
+INCLUDES += -I$(LDAP_ROOT)/plugins/slapd/slapi/include \
+	    -I$(LDAP_SRC)/ldap/include \
+	    -I$(LDAP_SRC)/ldap/servers/slapd \
+            -I$(LDAP_SRC)/../../../mozilla/work/mozilla/dist/public/nss/ \
+	    -I$(LDAP_BUILD)/include 
+CFLAGS= $(INCLUDES) -g -D_REENTRANT -fPIC
+LDFLAGS=
+LIBS=
 
-clientSDK: 
+OBJS=pam_ptimpl.o pam_ptconfig.o pam_ptdebug.o pam_ptpreop.o
+LOBJS=$(OBJS:.o=.lo)
 
-all:	$(OBJDEST) $(LIBDIR) $(LIBPAM_PASSTHRU)
+EXTRALIBS += -lpam
 
-$(LIBPAM_PASSTHRU): $(OBJS) $(LIBPAM_PASSTHRU_DLL_OBJ) $(DEF_FILE)
-	$(LINK_DLL) $(LIBPAM_PASSTHRU_DLL_OBJ) $(PLATFORMLIBS) $(EXTRA_LIBS)
+all:	pam-passthru-plugin.so
+
+pam-passthru-plugin.so: $(OBJS) 
+	$(LD) -shared $(LDFLAGS) $(LIBS) $(EXTRALIBS) -o $@ $(OBJS)
+
+.c.o:
+	$(CC) $(CFLAGS) -c $<
 
 veryclean: clean
 
 clean:
 	$(RM) $(OBJS)
-ifeq ($(ARCH), WINNT)
-	$(RM) $(LIBPAM_PASSTHRU_DLL_OBJ)
-endif
-	$(RM) $(LIBPAM_PASSTHRU)
-
-$(OBJDEST):
-	$(MKDIR) $(OBJDEST)
 
 #
 # header file dependencies (incomplete)

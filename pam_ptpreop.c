@@ -75,10 +75,15 @@ void * pam_passthruauth_get_plugin_identity()
 int
 pam_passthruauth_init( Slapi_PBlock *pb )
 {
+    void * plugin_identity=NULL;
+
     PAM_PASSTHRU_ASSERT( pb != NULL );
 
     slapi_log_error( SLAPI_LOG_PLUGIN, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
 	    "=> pam_passthruauth_init\n" );
+
+    slapi_pblock_get (pb, SLAPI_PLUGIN_IDENTITY, &plugin_identity);
+        pam_passthruauth_set_plugin_identity(plugin_identity);
 
     if ( slapi_pblock_set( pb, SLAPI_PLUGIN_VERSION,
 		    (void *)SLAPI_PLUGIN_VERSION_01 ) != 0
@@ -226,34 +231,34 @@ pam_passthru_bindpreop( Slapi_PBlock *pb )
     if (rc == LDAP_SUCCESS) {
         char *ndn = slapi_ch_strdup(normbinddn);
         if ((slapi_pblock_set(pb, SLAPI_CONN_DN, ndn) != 0) ||
-			(slapi_pblock_set(pb, SLAPI_CONN_AUTHMETHOD,
-							  SLAPD_AUTH_SIMPLE) != 0)) {
-            slapi_ch_free_string(&ndn);
-            rc = LDAP_OPERATIONS_ERROR;
-            errmsg = "unable to set connection DN or AUTHTYPE";
-            slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
-							"%s\n", errmsg);
+	    (slapi_pblock_set(pb, SLAPI_CONN_AUTHMETHOD,
+			      SLAPD_AUTH_SIMPLE) != 0)) {
+		slapi_ch_free_string(&ndn);
+		rc = LDAP_OPERATIONS_ERROR;
+		errmsg = "unable to set connection DN or AUTHTYPE";
+		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+				"%s\n", errmsg);
         } else {
-			LDAPControl **reqctrls = NULL;
-			slapi_pblock_get(pb, SLAPI_REQCONTROLS, &reqctrls);
-			if (slapi_control_present(reqctrls, LDAP_CONTROL_AUTH_REQUEST, NULL, NULL)) {
-				slapi_add_auth_response_control(pb, ndn);
-			}
+		LDAPControl **reqctrls = NULL;
+		slapi_pblock_get(pb, SLAPI_REQCONTROLS, &reqctrls);
+		if (slapi_control_present(reqctrls, LDAP_CONTROL_AUTH_REQUEST, NULL, NULL)) {
+			slapi_add_auth_response_control(pb, ndn);
 		}
+	}
+    }
+    
+    if (rc == LDAP_SUCCESS) {
+	    /* we are handling the result */
+	    slapi_send_ldap_result(pb, rc, NULL, errmsg, 0, NULL);
+	    /* tell bind code we handled the result */
+	    retcode = PAM_PASSTHRU_OP_HANDLED;
+    } else if (rc == LDAP_UNWILLING_TO_PERFORM || !cfg->pamptconfig_fallback) {
+	    /* tell bind code we already sent back the error result in pam_ptimpl.c */
+	    retcode = PAM_PASSTHRU_OP_HANDLED;
     }
 
-	if (rc == LDAP_SUCCESS) {
-		/* we are handling the result */
-		slapi_send_ldap_result(pb, rc, NULL, errmsg, 0, NULL);
-		/* tell bind code we handled the result */
-		retcode = PAM_PASSTHRU_OP_HANDLED;
-	} else if (!cfg->pamptconfig_fallback) {
-		/* tell bind code we already sent back the error result in pam_ptimpl.c */
-		retcode = PAM_PASSTHRU_OP_HANDLED;
-	}
-
     slapi_log_error(SLAPI_LOG_PLUGIN, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
-					"<= handled (error %d - %s)\n", rc, ldap_err2string(rc));
-
+		    "<= handled (error %d - %s)\n", rc, ldap_err2string(rc));
+    
     return retcode;
 }

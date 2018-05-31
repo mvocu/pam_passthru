@@ -96,9 +96,12 @@ pam_passthru_config(Slapi_Entry *config_e)
 	char returntext[SLAPI_DSE_RETURNTEXT_SIZE];
 
     if ( inited ) {
+#if 0
 		slapi_log_error( SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
 						 "only one PAM pass through plugin instance can be used\n" );
 		return( LDAP_PARAM_ERROR );
+#endif
+		return(LDAP_SUCCESS);
     }
 
 	/* initialize fields */
@@ -211,7 +214,7 @@ meth_to_int(char **map_method, int *err)
 		*err = 1;
 	}
 
-	if (!err) {
+	if (!*err) {
 		if (end && *end) {
 			*map_method = end + 1;
 		} else {
@@ -447,19 +450,21 @@ pam_passthru_apply_config (Slapi_PBlock *pb, Slapi_Entry* entryBefore, Slapi_Ent
 	char **includes = NULL;
 	char *new_service = NULL;
 	char *pam_ident_attr = NULL;
+	char *pam_service_attr = NULL;
 	char *map_method = NULL;
-	int fallback;
-	int secure;
+	PRBool fallback;
+	PRBool secure;
 
 	*returncode = LDAP_SUCCESS;
 
 	pam_ident_attr = slapi_entry_attr_get_charptr(e, PAMPT_PAM_IDENT_ATTR);
 	map_method = slapi_entry_attr_get_charptr(e, PAMPT_MAP_METHOD_ATTR);
 	new_service = slapi_entry_attr_get_charptr(e, PAMPT_SERVICE_ATTR);
+	pam_service_attr = slapi_entry_attr_get_charptr(e, PAMPT_SERVICE_ATTR_ATTR);
 	excludes = slapi_entry_attr_get_charray(e, PAMPT_EXCLUDES_ATTR);
 	includes = slapi_entry_attr_get_charray(e, PAMPT_INCLUDES_ATTR);
-	fallback = slapi_entry_attr_get_int(e, PAMPT_FALLBACK_ATTR);
-	secure = slapi_entry_attr_get_int(e, PAMPT_SECURE_ATTR);
+	fallback = slapi_entry_attr_get_bool(e, PAMPT_FALLBACK_ATTR);
+	secure = slapi_entry_attr_get_bool(e, PAMPT_SECURE_ATTR);
 
 	/* lock config here */
 	slapi_lock_mutex(theConfig.lock);
@@ -486,6 +491,13 @@ pam_passthru_apply_config (Slapi_PBlock *pb, Slapi_Entry* entryBefore, Slapi_Ent
 		slapi_ch_free_string(&theConfig.pamptconfig_pam_ident_attr);
 		theConfig.pamptconfig_pam_ident_attr = pam_ident_attr;
 		pam_ident_attr = NULL; /* config now owns memory */
+	}
+
+	if (!theConfig.pamptconfig_service_attr ||
+	    (pam_service_attr && PL_strcmp(theConfig.pamptconfig_service_attr, pam_service_attr))) {
+		slapi_ch_free_string(&theConfig.pamptconfig_service_attr);
+		theConfig.pamptconfig_service_attr = pam_service_attr;
+		pam_service_attr = NULL;
 	}
 
 	if (map_method) {

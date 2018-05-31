@@ -85,11 +85,11 @@ typedef struct pam_passthrusuffix {
 
 typedef struct pam_passthruconfig {
 	Slapi_Mutex *lock; /* for config access */
-    Pam_PassthruSuffix *pamptconfig_includes; /* list of suffixes to include in this op */
-    Pam_PassthruSuffix *pamptconfig_excludes; /* list of suffixes to exclude in this op */
+	Pam_PassthruSuffix *pamptconfig_includes; /* list of suffixes to include in this op */
+	Pam_PassthruSuffix *pamptconfig_excludes; /* list of suffixes to exclude in this op */
 	PRBool pamptconfig_fallback; /* if false, failure here fails entire bind */
 	                             /* if true, failure here falls through to regular bind */
-    PRBool pamptconfig_secure; /* if true, plugin only operates on secure connections */
+	PRBool pamptconfig_secure; /* if true, plugin only operates on secure connections */
 	char *pamptconfig_pam_ident_attr; /* name of attribute in user entry for ENTRY map method */
 	int pamptconfig_map_method1; /* how to map the BIND DN to the PAM identity */
 	int pamptconfig_map_method2; /* how to map the BIND DN to the PAM identity */
@@ -99,6 +99,7 @@ typedef struct pam_passthruconfig {
 #define PAMPT_MAP_METHOD_RDN 1 /* use the leftmost RDN value as the PAM identity */
 #define PAMPT_MAP_METHOD_ENTRY 2 /* use the PAM identity attribute in the entry */
 	char *pamptconfig_service; /* the PAM service name for pam_start() */
+	char *pamptconfig_service_attr; /* name of attribute containing PAM service in user entry */
 } Pam_PassthruConfig;
 
 #define PAMPT_MAP_METHOD_DN_STRING "DN"
@@ -113,7 +114,7 @@ typedef struct pam_passthruconfig {
 #define PAMPT_FALLBACK_ATTR "pamFallback" /* single */
 #define PAMPT_SECURE_ATTR "pamSecure" /* single */
 #define PAMPT_SERVICE_ATTR "pamService" /* single */
-
+#define PAMPT_SERVICE_ATTR_ATTR "pamServiceAttr" /* single */
 /*
  * public functions
  */
