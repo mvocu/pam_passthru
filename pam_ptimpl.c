@@ -148,6 +148,9 @@ free_pam_response(int nresp, struct pam_response *resp)
 }
 
 
+int
+need_new_pw( Slapi_PBlock *pb, long *t, Slapi_Entry *e, int pwresponse_req );
+
 static int
 do_weakpw_auth(Slapi_PBlock *pb, const char *binddn, int pw_response_requested) 
 {
