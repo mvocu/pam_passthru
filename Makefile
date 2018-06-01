@@ -62,9 +62,9 @@ LOBJS=$(OBJS:.o=.lo)
 
 EXTRALIBS += -lpam
 
-all:	pam-passthru-plugin.so
+all:	libpam-passthru-plugin.so
 
-pam-passthru-plugin.so: $(OBJS) 
+libpam-passthru-plugin.so: $(OBJS) 
 	$(LD) -shared $(LDFLAGS) $(LIBS) $(EXTRALIBS) -o $@ $(OBJS)
 
 .c.o:
