@@ -258,7 +258,7 @@ do_weakpw_auth(Slapi_PBlock *pb, char *binddn, int pw_response_requested)
 
 loser:
 	if(entry) { slapi_entry_free(entry); }
-	if(weakpw) slapi_ch_free(&weakpw);
+	if(weakpw) slapi_ch_free_string(&weakpw);
 	return rc;
 }
 
