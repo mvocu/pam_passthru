@@ -12,6 +12,9 @@
 
 
 #include <security/pam_appl.h>
+#include <pk11func.h>
+#include <nss.h>
+#include <nssb64.h>
 
 #include "pam_passthru.h"
 
