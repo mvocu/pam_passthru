@@ -144,6 +144,121 @@ free_pam_response(int nresp, struct pam_response *resp)
 	slapi_ch_free((void **)&resp);
 }
 
+
+static int
+do_weakpw_auth(Slapi_PBlock *pb, char *binddn, int pw_response_requested) 
+{
+	char buf[BUFSIZ];
+	char *weakpw = NULL;
+	Slapi_Entry *entry = NULL;
+	Slapi_DN *sdn = slapi_sdn_new_dn_byref(binddn);;
+	char *attrs[] = { NULL, NULL, NULL };
+	attrs[0] = "cuniweakuserpassword";
+	
+	int rc = slapi_search_internal_get_entry(sdn, NULL, &entry, 
+						 pam_passthruauth_get_plugin_identity());
+	slapi_sdn_free(&sdn);
+	if(rc != LDAP_SUCCESS) {
+		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+				"Could not find BIND dn %s\n",
+				escape_string(binddn, buf));
+		goto loser;
+	} else if(NULL == entry) {
+		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+				"Could not find entry for BIND dn %s\n",
+				escape_string(binddn, buf));
+		rc = LDAP_OPERATIONS_ERROR;
+		goto loser;
+	}
+
+	/* no fallback in this case */
+	if(slapi_check_account_lock(pb, entry, pw_response_requested, 0, 0) == 1) {
+		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+				"Entry %s is locked\n",
+				escape_string(binddn, buf));
+		rc = LDAP_UNWILLING_TO_PERFORM;
+		goto loser;
+	}
+
+	/* going to verify password */
+	weakpw = slapi_entry_attr_get_charptr(entry, "cuniweakuserpassword");
+	if(NULL == weakpw) {
+		slapi_log_error(SLAPI_LOG_FATAL, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+				"Entry %s has no weak password attribute\n",
+				escape_string(binddn, buf));
+		rc = LDAP_NO_SUCH_ATTRIBUTE;
+		goto loser;
+	}
+
+	struct berval *creds = NULL;
+	slapi_pblock_get(pb, SLAPI_BIND_CREDENTIALS, &creds ); /* the password */
+	/* compare MD5 hash of the given credentials with stored password */
+	if(creds) {
+#define MD5_HASH_LEN 20
+		rc=LDAP_OPERATIONS_ERROR;
+		char * bver;
+		PK11Context *ctx=NULL;
+		unsigned int outLen;
+		unsigned char hash_out[MD5_HASH_LEN];
+		unsigned char b2a_out[MD5_HASH_LEN*2]; /* conservative */
+		SECItem binary_item;
+		
+		ctx = PK11_CreateDigestContext(SEC_OID_MD5);
+		if (ctx == NULL) {
+			slapi_log_error(SLAPI_LOG_PLUGIN, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+					"Could not create context for digest operation for password compare");
+			goto loser;
+		}
+		
+		/* create the hash */
+		PK11_DigestBegin(ctx);
+		PK11_DigestOp(ctx, creds->bv_val, creds->bv_len);
+		PK11_DigestFinal(ctx, hash_out, &outLen, sizeof hash_out);
+		PK11_DestroyContext(ctx, 1);
+		
+		/* convert the binary hash to base64 */
+		binary_item.data = hash_out;
+		binary_item.len = outLen;
+		bver = NSSBase64_EncodeItem(NULL, b2a_out, sizeof b2a_out, &binary_item);
+		/* bver points to b2a_out upon success */
+		if (bver) {
+			rc = slapi_ct_memcmp(bver, weakpw, strlen(dbpwd));
+			if(rc == 0) {
+				long t;
+
+				switch(need_new_pw(pb, &t, entry, pw_response_requested)) {
+				case 1:
+					rc = LDAP_UNWILLING_TO_PERFORM;
+					break;
+                                                
+				case 2:
+					break;
+
+				case -1: 
+					rc = LDAP_OPERATIONS_ERROR;
+					goto loser;
+
+				default:
+					break;
+				} 
+
+			} else {
+				rc = LDAP_INVALID_CREDENTIALS;
+			}
+		} else {
+			slapi_log_error(SLAPI_LOG_PLUGIN, PAM_PASSTHRU_PLUGIN_SUBSYSTEM,
+					"Could not base64 encode hashed value for password compare");
+		}
+	} else {
+		rc = LDAP_OPERATIONS_ERROR;
+	}
+
+loser:
+	if(entry) { slapi_entry_free(entry); }
+	if(weakpw) slapi_ch_free(&weakpw);
+	return rc;
+}
+
 /*
  * This is the conversation function passed into pam_start().  This is what sets the password
  * that PAM uses to authenticate.  This function is sort of stupid - it assumes all echo off
@@ -250,6 +365,18 @@ do_one_pam_auth(
 		goto done; /* skip the pam stuff */
 	}
 	binddn = slapi_sdn_get_dn(bindsdn);
+
+	/* CUNI weak passwords */
+	if(strcmp(pam_service, "weakpassword") == 0) {
+		/* ugly site-specific hack for one specific pam service, which is not pam at all*/
+		retcode = do_weakpw_auth(pb, binddn, pw_response_requested);
+		if(LDAP_SUCCESS == retcode) {
+			errmsg = PR_smprintf("Weak password authentication for DN %s successful", binddn);
+		} else {
+			errmsg = PR_smprintf("Weak password authentication for DN %s failed", binddn);
+		}
+		goto done;
+	}
 
 	if (method == PAMPT_MAP_METHOD_RDN) {
 		derive_from_bind_dn(pb, bindsdn, &pam_id);
