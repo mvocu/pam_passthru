@@ -149,7 +149,7 @@ free_pam_response(int nresp, struct pam_response *resp)
 
 
 static int
-do_weakpw_auth(Slapi_PBlock *pb, char *binddn, int pw_response_requested) 
+do_weakpw_auth(Slapi_PBlock *pb, const char *binddn, int pw_response_requested) 
 {
 	char buf[BUFSIZ];
 	char *weakpw = NULL;
@@ -225,7 +225,7 @@ do_weakpw_auth(Slapi_PBlock *pb, char *binddn, int pw_response_requested)
 		bver = NSSBase64_EncodeItem(NULL, b2a_out, sizeof b2a_out, &binary_item);
 		/* bver points to b2a_out upon success */
 		if (bver) {
-			rc = slapi_ct_memcmp(bver, weakpw, strlen(dbpwd));
+			rc = slapi_ct_memcmp(bver, weakpw, strlen(weakpw));
 			if(rc == 0) {
 				long t;
 
