@@ -57,7 +57,7 @@ CFLAGS= $(INCLUDES) -g -D_REENTRANT -fPIC
 LDFLAGS=
 LIBS=$(LIBS_DIRSRV) $(LIBS_NSPR) $(LIBS_NSS)
 
-OBJS=pam_ptimpl.o pam_ptconfig.o pam_ptdebug.o pam_ptpreop.o
+OBJS=pam_ptimpl.o pam_ptconfig.o pam_ptdebug.o pam_ptpreop.o pam_ptpwmgmt.o
 LOBJS=$(OBJS:.o=.lo)
 
 EXTRALIBS += -lpam

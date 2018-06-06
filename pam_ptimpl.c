@@ -149,7 +149,7 @@ free_pam_response(int nresp, struct pam_response *resp)
 
 
 int
-need_new_pw( Slapi_PBlock *pb, long *t, Slapi_Entry *e, int pwresponse_req );
+_pam_need_new_pw( Slapi_PBlock *pb, long *t, Slapi_Entry *e, int pwresponse_req );
 
 static int
 do_weakpw_auth(Slapi_PBlock *pb, const char *binddn, int pw_response_requested) 
@@ -232,7 +232,7 @@ do_weakpw_auth(Slapi_PBlock *pb, const char *binddn, int pw_response_requested)
 			if(rc == 0) {
 				long t;
 
-				switch(need_new_pw(pb, &t, entry, pw_response_requested)) {
+				switch(_pam_need_new_pw(pb, &t, entry, pw_response_requested)) {
 				case 1:
 					rc = LDAP_UNWILLING_TO_PERFORM;
 					break;
