@@ -1,6 +1,14 @@
 #include "pam_passthru.h"
 #include "pw.h"
 
+typedef PRInt32 slapi_onoff_t;
+typedef PRInt32 slapi_int_t;
+
+#define NO_TIME (time_t)0 /* cannot be -1, NT's localtime( -1 ) returns NULL */
+#define NOT_FIRST_TIME (time_t)1 /* not the first logon */
+#define SLAPD_END_TIME (time_t)2147483647  /* (2^31)-1, in 2038 */
+
+
 typedef struct passwordpolicyarray {
   slapi_onoff_t pw_change;        /* 1 - indicates that users are allowed to change the pwd */
   slapi_onoff_t pw_must_change;   /* 1 - indicates that users must change pwd upon reset */
@@ -34,6 +42,7 @@ typedef struct passwordpolicyarray {
   Slapi_DN *pw_admin;
   Slapi_DN **pw_admin_user;
 } passwdPolicy;
+
 
 /* need_new_pw() is called when non rootdn bind operation succeeds with authentication */ 
 static int
