@@ -1,4 +1,5 @@
 #include "pam_passthru.h"
+#include "pw.h"
 
 /* need_new_pw() is called when non rootdn bind operation succeeds with authentication */ 
 static int
