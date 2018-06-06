@@ -1,6 +1,39 @@
 #include "pam_passthru.h"
-#include "slap.h"
 #include "pw.h"
+
+typedef struct passwordpolicyarray {
+  slapi_onoff_t pw_change;        /* 1 - indicates that users are allowed to change the pwd */
+  slapi_onoff_t pw_must_change;   /* 1 - indicates that users must change pwd upon reset */
+  slapi_onoff_t pw_syntax;
+  int pw_minlength;
+  int pw_mindigits;
+  int pw_minalphas;
+  int pw_minuppers;
+  int pw_minlowers;
+  int pw_minspecials;
+  int pw_min8bit;
+  int pw_maxrepeats;
+  int pw_mincategories;
+  int pw_mintokenlength;
+  slapi_onoff_t pw_exp;
+  slapi_onoff_t pw_send_expiring;
+  long long pw_maxage;
+  long long pw_minage;
+  long long pw_warning;
+  slapi_onoff_t pw_history;
+  int pw_inhistory;
+  slapi_onoff_t pw_lockout;
+  int pw_maxfailure;
+  slapi_onoff_t pw_unlock;
+  long pw_lockduration;
+  long pw_resetfailurecount;
+  int pw_gracelimit;
+  slapi_onoff_t pw_is_legacy;
+  slapi_onoff_t pw_track_update_time;
+  struct pw_scheme *pw_storagescheme;
+  Slapi_DN *pw_admin;
+  Slapi_DN **pw_admin_user;
+} passwdPolicy;
 
 /* need_new_pw() is called when non rootdn bind operation succeeds with authentication */ 
 static int
