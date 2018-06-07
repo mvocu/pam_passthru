@@ -44,20 +44,24 @@
 CC=gcc
 LD=ld
 
+389DS_VERSION = 1.3.5.17
+389DS_SOURCE_BASE = /usr/local/src
+
 INCLUDES_DIRSRV = $(shell pkg-config --cflags dirsrv)
 LIBS_DIRSRV = $(shell pkg-config --libs dirsrv)
 INCLUDES_NSPR = $(shell pkg-config --cflags nspr)
 LIBS_NSPR = $(shell pkg-config --libs nspr)
 INCLUDES_NSS = $(shell pkg-config --cflags nss)
 LIBS_NSS = $(shell pkg-config --libs nss)
+INCLUDES_389 = -I$(389DS_SOURCE_BASE)/389-ds-base-$(389DS_VERSION)/ldap/servers/slapd
 
-INCLUDES = $(INCLUDES_DIRSRV) $(INCLUDES_NSPR) $(INCLUDES_NSS) -I.
+INCLUDES = $(INCLUDES_DIRSRV) $(INCLUDES_NSPR) $(INCLUDES_NSS) $(INCLUDES_389) -I.
 
 CFLAGS= $(INCLUDES) -g -D_REENTRANT -fPIC
 LDFLAGS=
 LIBS=$(LIBS_DIRSRV) $(LIBS_NSPR) $(LIBS_NSS)
 
-OBJS=pam_ptimpl.o pam_ptconfig.o pam_ptdebug.o pam_ptpreop.o
+OBJS=pam_ptimpl.o pam_ptconfig.o pam_ptdebug.o pam_ptpreop.o pam_ptpwmgmt.o
 LOBJS=$(OBJS:.o=.lo)
 
 EXTRALIBS += -lpam
