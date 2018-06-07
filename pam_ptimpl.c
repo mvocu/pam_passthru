@@ -372,6 +372,14 @@ do_one_pam_auth(
 	}
 	binddn = slapi_sdn_get_dn(bindsdn);
 
+	if (method == PAMPT_MAP_METHOD_RDN) {
+		derive_from_bind_dn(pb, bindsdn, &pam_id);
+	} else if (method == PAMPT_MAP_METHOD_ENTRY) {
+		derive_from_bind_entry(pb, bindsdn, &pam_id, map_ident_attr, &locked);
+	} else {
+		init_my_str_buf(&pam_id, binddn);
+	}
+
 	/* CUNI weak passwords */
 	if(strcmp(pam_service, "weakpassword") == 0) {
 		/* ugly site-specific hack for one specific pam service, which is not pam at all*/
@@ -382,14 +390,6 @@ do_one_pam_auth(
 			errmsg = PR_smprintf("Weak password authentication for DN %s failed", binddn);
 		}
 		goto done;
-	}
-
-	if (method == PAMPT_MAP_METHOD_RDN) {
-		derive_from_bind_dn(pb, bindsdn, &pam_id);
-	} else if (method == PAMPT_MAP_METHOD_ENTRY) {
-		derive_from_bind_entry(pb, bindsdn, &pam_id, map_ident_attr, &locked);
-	} else {
-		init_my_str_buf(&pam_id, binddn);
 	}
 
 	if (locked) {
