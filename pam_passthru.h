@@ -22,12 +22,12 @@
 #include <string.h>
 #include <time.h>
 #include <sys/types.h>
-#include "portable.h"
-#include "slapi-plugin.h"
+#include <portable.h>
+#include <slapi-plugin.h>
 #include <nspr.h>
 
 /* Private API: to get slapd_pr_strerror() and SLAPI_COMPONENT_NAME_NSPR */
-#include "slapi-private.h"
+#include <slapi-private.h>
 
 /*
  * macros
