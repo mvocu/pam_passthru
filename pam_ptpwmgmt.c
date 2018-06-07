@@ -5,7 +5,7 @@
 #include <slap.h>
 
 /* need_new_pw() is called when non rootdn bind operation succeeds with authentication */ 
-static int
+int
 _pam_need_new_pw( Slapi_PBlock *pb, long *t, Slapi_Entry *e, int pwresponse_req )
 {
 	time_t 		cur_time, pw_exp_date;
