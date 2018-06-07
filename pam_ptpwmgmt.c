@@ -7,6 +7,8 @@ typedef PRInt32 slapi_int_t;
 #define NO_TIME (time_t)0 /* cannot be -1, NT's localtime( -1 ) returns NULL */
 #define NOT_FIRST_TIME (time_t)1 /* not the first logon */
 #define SLAPD_END_TIME (time_t)2147483647  /* (2^31)-1, in 2038 */
+#define SLAPD_DISCONNECT_ERROR_BASE -5000
+#define SLAPD_DISCONNECT_UNBIND                 SLAPD_DISCONNECT_ERROR_BASE + 9
 
 
 typedef struct passwordpolicyarray {
