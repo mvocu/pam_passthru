@@ -53,11 +53,11 @@ INCLUDES_NSPR = $(shell pkg-config --cflags nspr)
 LIBS_NSPR = $(shell pkg-config --libs nspr)
 INCLUDES_NSS = $(shell pkg-config --cflags nss)
 LIBS_NSS = $(shell pkg-config --libs nss)
-INCLUDES_389 = -I$(389DS_SOURCE_BASE)/389-ds-base-$(389DS_VERSION)/ldap/servers/slapd
+INCLUDES_389 = -I$(389DS_SOURCE_BASE)/389-ds-base-$(389DS_VERSION)/ldap/servers/slapd -I$(389DS_SOURCE_BASE)/389-ds-base-$(389DS_VERSION)/ldap/include
 
 INCLUDES = $(INCLUDES_DIRSRV) $(INCLUDES_NSPR) $(INCLUDES_NSS) $(INCLUDES_389) -I.
 
-CFLAGS= $(INCLUDES) -g -D_REENTRANT -fPIC
+CFLAGS= $(INCLUDES) -g -D_REENTRANT -fPIC -DHAVE_INTTYPES_H
 LDFLAGS=
 LIBS=$(LIBS_DIRSRV) $(LIBS_NSPR) $(LIBS_NSS)
 

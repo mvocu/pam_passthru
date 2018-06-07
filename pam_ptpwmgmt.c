@@ -2,7 +2,7 @@
 
 #include <slapi-private.h>
 #include <pw.h>
-
+#include <slap.h>
 
 /* need_new_pw() is called when non rootdn bind operation succeeds with authentication */ 
 static int
